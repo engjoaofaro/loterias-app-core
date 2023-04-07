@@ -24,6 +24,9 @@ def lambda_handler(event, context):
             games_user = i['games']
             print("Games User: ", games_user)
             r = response.json()
+            if r['numero_concurso'] != i['concurso']:
+                raise Exception("Número do concurso não disponível ou ainda não efetuado sorteio. Tente novamente"
+                                " mais tarde!")
             dezenas_sorteadas = r['dezenas']
             wzero = [ele.lstrip('0') for ele in dezenas_sorteadas]
             print("Dezenas Sorteadas: ", wzero)
