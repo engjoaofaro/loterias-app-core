@@ -30,7 +30,6 @@ def lambda_handler(event, context):
             dezenas_sorteadas = r['dezenas']
             wzero = [ele.lstrip('0') for ele in dezenas_sorteadas]
             print("Dezenas Sorteadas: ", wzero)
-            i = 0
             final_list = []
             for game in games_user:
                 lista_acertos = []
