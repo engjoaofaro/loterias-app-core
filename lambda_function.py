@@ -58,4 +58,4 @@ def lambda_handler(event, context):
             }
 
     except Exception as error:
-        return {'code': 500, 'message': error}
+        return {'code': 500, 'message': str(error)}
