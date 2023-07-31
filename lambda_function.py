@@ -1,4 +1,4 @@
-import requests
+import requests as request
 import os
 
 from mapper.map_dto import map_object
@@ -8,6 +8,7 @@ base_url = os.getenv('BASE_URL')
 token = os.getenv('TOKEN')
 
 
+# noinspection PyGlobalUndefined
 def lambda_handler(event, context):
     print(event, context)
     print("mapping object...")
@@ -19,7 +20,7 @@ def lambda_handler(event, context):
 
         for i in items:
             payload = {'loteria': i['loteria'], 'token': token, 'concurso': i['concurso']}
-            response = requests.get(base_url, payload)
+            response = request.get(base_url, payload)
             print(response.json())
             games_user = i['games']
             print("Games User: ", games_user)
@@ -49,12 +50,9 @@ def lambda_handler(event, context):
             print("Lista de acerto final: ", final_list)
             publish(final_list)
 
-            return {
-                'code': 200,
-                'loteria': r['nome'],
-                'concurso': r['numero_concurso'],
-                'Dezenas': dezenas_sorteadas
-            }
+        return {
+            'code': 200
+        }
 
     except Exception as error:
         return {'code': 500, 'message': str(error)}
