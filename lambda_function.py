@@ -8,7 +8,6 @@ base_url = os.getenv('BASE_URL')
 token = os.getenv('TOKEN')
 
 
-# noinspection PyGlobalUndefined
 def lambda_handler(event, context):
     print(event, context)
     print("mapping object...")
