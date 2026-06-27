@@ -1,135 +1,158 @@
 # loterias-app-core
 
-# **Documentação do Projeto**
-## **1. Descrição Geral**
-Este projeto se trata de uma função Lambda em Python projetada para interagir com uma API (possivelmente chamada de "Loterias API"), processar entradas de eventos, mapear dados e realizar cálculos relacionados a jogos de loteria com base em números sorteados. Além disso, os resultados finais são publicados por meio do método `publish`.
-O principal objetivo é validar os números sorteados a partir da API de Loterias com apostas realizadas pelos usuários e retornar uma lista com os resultados dos jogos, incluindo a quantidade de acertos por jogo.
-## **2. Configurações do Projeto**
-### **2.1 Variáveis de Ambiente**
-O projeto utiliza variáveis de ambiente para definir configurações essenciais:
-- `BASE_URL`: URL base da API de Loterias.
-- `TOKEN`: Token utilizado para autenticação na API.
+Lambda (Python) que é o **núcleo de apuração** do **Loterias Sim**: recebe as apostas
+(via Step Functions, no formato do DynamoDB), consulta o resultado oficial na API de
+loterias, **confere quantos números cada jogo acertou** e publica o resultado no SNS
+(e-mail ao usuário).
 
-### **2.2 Bibliotecas Utilizadas**
-O código utiliza as seguintes bibliotecas:
-- **`requests`**: Para realizar chamadas HTTP à API de Loterias.
-- **`os`**: Para acessar variáveis de ambiente do sistema.
-- **Componentes Internos**:
-    - `mapper.map_dto.map_object`: Função para mapear as entradas (`event`) em objetos processáveis.
-    - `helper.publisher.publish`: Função responsável por publicar os resultados processados.
+> Função Lambda implantada: `loterias-core`.
+> Parte do ecossistema **Loterias Sim** — visão geral em [Arquitetura](#arquitetura-e-fluxo).
 
-## **3. Estrutura da Função Lambda**
-### **3.1 Entradas**
-- **`event`**: Objeto de entrada contendo dados dos jogos a serem processados.
-    - Contém informações como o número do concurso e os jogos realizados por cada usuário.
+---
 
-- **`context`**: Informações sobre o contexto de execução (não utilizado diretamente no código).
+## Visão geral
 
-### **3.2 Fluxo da Função**
-1. **Recebimento dos dados de entrada:**
-    - Imprime os dados recebidos de `event` e `context` para depuração.
+| Item | Valor |
+|------|-------|
+| Runtime | Python 3.9+ |
+| Handler | `lambda_function.lambda_handler` |
+| Invocação | Task de uma **AWS Step Functions** (agendada pelo `loterias-app-validator`) |
+| Entrada | Itens no formato AttributeValue do DynamoDB (`{"N":...}`, `{"S":...}`, `{"L":...}`) |
+| Saída | Publica no **SNS** (`TOPIC_ARN`) e retorna `{code:200}`/`{code:500}` para o fluxo |
+| Dependências | `requests~=2.32.3`, `boto3~=1.26.105` |
 
-2. **Mapeamento dos objetos:**
-    - Utiliza a função `map_object` para processar e formatar as informações de entrada em uma estrutura adequada.
-    - O resultado é uma lista de objetos com informações relacionadas a loterias.
+### Loterias suportadas (`gameType`)
+| Código | Loteria |
+|:------:|---------|
+| 1 | Mega-Sena |
+| 2 | Lotofácil |
+| 3 | Lotomania |
 
-3. **Processamento de cada item:**
-    - Para cada item da lista mapeada:
-        - Preparar o payload com informações como: nome da loteria, token de autenticação e número do concurso.
-        - Realizar uma requisição `GET` para a API de Loterias.
-        - Validar a resposta:
-            - Verificar se o número de concurso da resposta coincide com o número enviado.
-            - Caso contrário, lançar uma exceção indicando que o sorteio ainda não foi concluído.
+---
 
-        - Extrair as dezenas sorteadas e formatá-las para remover zeros à esquerda.
+## Estrutura
 
-4. **Cálculo de acertos:**
-    - Comparar os números sorteados com os números correspondentes de cada jogo do usuário (`games_user`).
-    - Registrar o total de acertos por jogo e armazenar os resultados no formato:
-``` json
-     {
-         "jogo": <Jogos Individuais>,
-         "concurso": <Número do Concurso>,
-         "Dezenas Sorteadas": <Dezenas da API>,
-         "Total de acertos": <Total de Números Iguais>
-     }
 ```
-1. **Publicação dos Resultados:**
-    - Enviar a lista de resultados finais usando a função `publish`.
+loterias-app-core/
+├── lambda_function.py     # Handler: mapeia → consulta API → confere acertos → publica
+├── mapper/
+│   └── map_dto.py         # map_object(event): DynamoDB AttributeValue → dicts normalizados
+└── helper/
+    └── publisher.py       # publish(message): SNS publish no TOPIC_ARN (Subject "RESULTADO LOTERIA")
+```
 
-2. **Retorno Final:**
-    - Em caso de sucesso: Retorna um objeto JSON com o código `200`.
-    - Em caso de falha: Retorna o código `500` com a mensagem da exceção.
+---
 
-## **4. Arquitetura Interna**
-### **4.1 Componentes**
-1. **Função Principal (`lambda_handler`)**:
-    - Responsável por controlar o fluxo de execução, incluindo chamadas para mapeamento, API, cálculo dos resultados e publicação.
+## Fluxo do handler
 
-2. **Funções Auxiliares/Dependências:**
-    - `map_object` (via `mapper.map_dto`): Mapeia o evento para um formato pré-definido.
-    - `publish` (via `helper.publisher`): Publica os resultados dos jogos processados.
+1. **Mapeamento** — `map_object(event)` percorre `event['Items']`, traduz `gameType`
+   (1/2/3 → `megasena`/`lotofacil`/`lotomania`) e extrai `voucher`, `lotteryNumber`
+   (concurso), `email` e `games` (listas de dezenas).
+2. **Consulta à API** — para cada item, `GET {BASE_URL}?loteria&token&concurso`.
+3. **Validação** — se `numero_concurso` da API ≠ `concurso` solicitado, lança exceção
+   ("sorteio ainda não efetuado").
+4. **Conferência** — remove zeros à esquerda das dezenas e conta os acertos de cada
+   jogo do usuário.
+5. **Publicação** — `publish(final_list)` no SNS.
+6. **Retorno** — `{ "code": 200 }` (sucesso) ou `{ "code": 500, "message": "..." }`
+   (erro) para o próximo estado da Step Function.
 
-### **4.2 Organização do Código**
-O código está escrito no formato de script Python, dividido de forma simples em:
-- Importações de bibliotecas e módulos.
-- Declarações de variáveis globais (configurações via `os.getenv`).
-- Definição da função principal.
-
-## **5. Detalhes Técnicos**
-### **5.1 Requisição à API**
-A comunicação com a API de Loterias é feita com uma requisição HTTP `GET`. Estrutura do payload enviado:
-``` python
+### Entrada (event)
+```json
 {
-    "loteria": i["loteria"],
-    "token": token,
-    "concurso": i["concurso"]
-}
-```
-Os dados importantes obtidos da API incluem:
-- `numero_concurso`: Usado para validação.
-- `dezenas`: Números sorteados pelo sistema.
-
-### **5.2 Tratamento de Exceções**
-Em caso de erros durante o processo (ex.: números do concurso indisponíveis ou erros da API), uma exceção é lançada e tratada retornando:
-``` json
-{
-    "code": 500,
-    "message": "<Mensagem do Erro>"
-}
-```
-### **5.3 Publicação**
-A lista final, contendo o resultado de cada jogo, é enviada pela função `publish`. O formato dos dados publicados é:
-``` json
-[
+  "Items": [
     {
-        "jogo": <Jogos do Usuário>,
-        "concurso": <Número do Concurso>,
-        "Dezenas Sorteadas": <Números Sorteados>,
-        "Total de acertos": <Quantidade de Acertos>
-    },
-    ...
+      "gameType": {"N": "1"},
+      "voucher": {"S": "TXN_123"},
+      "lotteryNumber": {"N": "2890"},
+      "email": {"S": "user@example.com"},
+      "games": {"L": [ {"L": [ {"N":"5"}, {"N":"12"}, {"N":"45"} ]} ]}
+    }
+  ]
+}
+```
+
+### Resultado publicado (SNS)
+```json
+[
+  {
+    "jogo": [ {"N":"5"}, {"N":"12"}, {"N":"45"} ],
+    "concurso": "2890",
+    "Dezenas Sorteadas": ["05","12","45","67","78","90"],
+    "Total de acertos": 3
+  }
 ]
 ```
-## **6. Testes**
-### **6.1 Casos de Teste Sugeridos**
-1. **Entrada Válida**:
-    - Evento com jogos e concursos válidos.
-    - API retorna as dezenas corretas.
-    - Verificar se o retorno inclui os acertos corretos.
 
-2. **Erro na API**:
-    - Quando o número do concurso não está disponível na API.
-    - Verificar se a exceção é tratada corretamente.
+---
 
-3. **Formato Inválido no Evento**:
-    - Simular eventos mal formatados para confirmar comportamento.
+## Variáveis de ambiente
 
-4. **Teste com Múltiplos Jogos**:
-    - Validar o comportamento com mais de um jogo simultâneo no evento.
+| Variável | Descrição |
+|----------|-----------|
+| `BASE_URL` | URL base da API de loterias |
+| `TOKEN` | Token de autenticação da API |
+| `TOPIC_ARN` | ARN do tópico SNS onde os resultados são publicados |
 
-## **7. Possíveis Melhorias**
-- Implementar logging estruturado em vez de `print` para melhor rastreamento.
-- Adicionar mais validações nas entradas (ex.: validação do JSON recebido).
-- Adicionar testes unitários para verificar funções críticas como `map_object` e `publish`.
-- Adotar uma abordagem mais robusta para gerenciar erros no consumo da API (ex.: re-tentativas).
+---
+
+## Permissões (IAM)
+
+A role precisa apenas de `sns:Publish` no `TOPIC_ARN` (os dados das apostas chegam
+prontos no evento da Step Functions; não há acesso direto ao DynamoDB aqui).
+
+---
+
+## Deploy
+
+```bash
+pip install -r requirements.txt -t build/
+cp -r lambda_function.py mapper/ helper/ build/
+( cd build && zip -r ../function.zip . )
+aws lambda update-function-code --function-name loterias-core \
+  --zip-file fileb://function.zip --region sa-east-1
+```
+
+Recomenda-se timeout ≥ 30 s (faz chamadas HTTP externas).
+
+---
+
+## Arquitetura e fluxo
+
+```
+loterias-app-validator ─► EventBridge Scheduler ─► Step Functions
+                                                        │ (Task)
+                                                        ▼
+                                                 loterias-app-core ─► API Caixa
+                                                        │
+                                                        ▼
+                                                   SNS ─► e-mail do usuário
+```
+
+Esta Lambda é uma **Task** dentro da máquina de estados (definida fora deste repo, em
+IaC). O retorno `code` (200/500) direciona o próximo estado.
+
+---
+
+## Testes sugeridos
+
+1. **Entrada válida** — jogos/concurso válidos; conferir contagem de acertos.
+2. **Erro na API** — concurso ainda não sorteado; conferir tratamento da exceção.
+3. **Evento mal formatado** — confirmar comportamento.
+4. **Múltiplos jogos** — validar laço de conferência.
+
+---
+
+## Pontos de atenção e melhorias
+
+- 🔢 **Conferência O(n·m·k)** (laço triplo) — para muitos jogos, otimizar usando
+  `set(dezenas_sorteadas)` e contagem por interseção.
+- ⚠️ **Sem retry/timeout explícito** na chamada HTTP; `except Exception` genérico.
+  Separar erros de API, validação e SNS.
+- ⚠️ **`publish()` sem tratamento de erro:** se o SNS falhar, ainda assim a Lambda
+  pode retornar 200. Tratar e refletir no `code`.
+- 🪵 Trocar `print` por logging estruturado.
+- 🔐 Mover `TOKEN` para Secrets Manager/SSM.
+- 🧪 Adicionar testes unitários para `map_object` e a lógica de acertos.
+- 📊 Comparação de strings (`x['N'] == dezena`) é frágil a tipos/zero-padding —
+  normalizar para `int` dos dois lados.
