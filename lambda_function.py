@@ -13,18 +13,20 @@ import boto3
 from mapper.map_dto import map_object
 from service.apuracao import build_outcome
 from helper.results_api import fetch_result, NotDrawnYet
-from helper.publisher import publish
+from helper.mailer import send_result_email
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 ddb = boto3.client("dynamodb")
 resource = boto3.resource("dynamodb")
+ses = boto3.client("sesv2")
 
 GAME_TABLE = os.getenv("GAME_TABLE", "Game")
 OUTCOMES_TABLE = os.getenv("OUTCOMES_TABLE", "LoteriasOutcomes")
 BASE_URL = os.getenv("BASE_URL")
 TOKEN = os.getenv("TOKEN")
+SES_SENDER = os.getenv("SES_SENDER", "Loterias Sim <nao-responda@loteriassim.com.br>")
 
 
 def _scan_pending():
@@ -82,9 +84,9 @@ def lambda_handler(event, context):
             continue
 
         try:
-            publish(outcome)
+            send_result_email(ses, SES_SENDER, outcome)
         except Exception as error:  # noqa: BLE001 - notificação é best-effort
-            logger.exception("Erro notificando %s: %s", bet["voucher"], error)
+            logger.exception("Erro enviando e-mail %s: %s", bet["voucher"], error)
 
         _mark_done(bet["voucher"], outcome["maxAcertos"])
         done += 1
