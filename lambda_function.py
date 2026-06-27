@@ -14,6 +14,7 @@ from mapper.map_dto import map_object
 from service.apuracao import build_outcome
 from helper.results_api import fetch_result, NotDrawnYet
 from helper.mailer import send_result_email
+from helper.secret import get_api_token
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -25,7 +26,6 @@ ses = boto3.client("sesv2")
 GAME_TABLE = os.getenv("GAME_TABLE", "Game")
 OUTCOMES_TABLE = os.getenv("OUTCOMES_TABLE", "LoteriasOutcomes")
 BASE_URL = os.getenv("BASE_URL")
-TOKEN = os.getenv("TOKEN")
 SES_SENDER = os.getenv("SES_SENDER", "Loterias Sim <nao-responda@loteriassim.com.br>")
 
 
@@ -55,6 +55,7 @@ def _mark_done(voucher, max_hits):
 
 def lambda_handler(event, context):
     outcomes = resource.Table(OUTCOMES_TABLE)
+    token = get_api_token()
     bets = map_object(_scan_pending())
     logger.info("Apostas pendentes: %d", len(bets))
 
@@ -65,7 +66,7 @@ def lambda_handler(event, context):
         key = (bet["loteria"], bet["concurso"])
         try:
             if key not in cache:
-                cache[key] = fetch_result(BASE_URL, TOKEN, bet["loteria"], bet["concurso"])
+                cache[key] = fetch_result(BASE_URL, token, bet["loteria"], bet["concurso"])
             drawn = cache[key]["dezenas"]
         except NotDrawnYet:
             pending += 1
